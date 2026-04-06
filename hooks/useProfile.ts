@@ -1,67 +1,74 @@
 // src/hooks/useProfile.ts
-import { useState } from "react";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useState, useEffect, useCallback } from "react";
 import { useUser } from "@clerk/clerk-expo";
-import { postEvents } from "@/hooks/usePosts";
 
-const STORAGE_KEY = "@user_profile_data";
+export interface ProfileFormData {
+  firstName: string;
+  username: string;
+  bio: string;
+  avatar: string;
+}
 
 export const useProfile = () => {
-  const { user } = useUser();
-  const [formData, setFormData] = useState({
+  const { user, isLoaded } = useUser();
+
+  // ✅ Hooks sempre no topo
+  const [formData, setFormData] = useState<ProfileFormData>({
     firstName: "",
     username: "",
     bio: "",
-    location: "",
+    avatar: "",
   });
+
   const [isUpdating, setIsUpdating] = useState(false);
 
-  const updateFormField = (field: string, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-  };
+  // Preenche dados do Clerk automaticamente
+  useEffect(() => {
+    if (isLoaded && user) {
+      setFormData({
+        firstName: user.firstName || "",
+        username: user.username || "",
+        bio: user.publicMetadata?.bio || "",
+        avatar: user.imageUrl || "",
+      });
+    }
+  }, [isLoaded, user]);
 
-  const saveProfile = async () => {
+  // Atualiza campos individuais
+  const updateFormField = useCallback((field: keyof ProfileFormData, value: string) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+  }, []);
+
+  // Atualiza múltiplos campos de uma vez
+  const setProfileData = useCallback((data: Partial<ProfileFormData>) => {
+    setFormData(prev => ({ ...prev, ...data }));
+  }, []);
+
+  // Salva perfil no Clerk
+  const saveProfile = useCallback(async (avatarFile?: File) => {
     if (!user) return;
+
     try {
       setIsUpdating(true);
-
-      // ✅ Atualiza Clerk
       await user.update({
         firstName: formData.firstName,
-        unsafeMetadata: {
-          username: formData.username,
-          bio: formData.bio,
-          location: formData.location,
-        },
+        username: formData.username,
+        profileImageFile: avatarFile,
+        publicMetadata: { bio: formData.bio },
       });
-
-      // ✅ Salva localmente
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(formData));
-
-      // ✅ Atualiza avatar do usuário nas listas locais
-      const keys = await AsyncStorage.getAllKeys();
-      const relevantKeys = keys.filter(
-        (key) => key.startsWith("followers_") || key.startsWith("following_")
-      );
-
-      for (const key of relevantKeys) {
-        const stored = await AsyncStorage.getItem(key);
-        if (!stored) continue;
-        const list = JSON.parse(stored);
-        const updatedList = list.map((u: any) =>
-          u.id === user.id ? { ...u, avatar: user.imageUrl } : u
-        );
-        await AsyncStorage.setItem(key, JSON.stringify(updatedList));
-      }
-
-      // ✅ Emite evento global de atualização
-      postEvents.emit("post-updated");
     } catch (error) {
       console.error("Erro ao salvar perfil:", error);
+      throw error;
     } finally {
       setIsUpdating(false);
     }
-  };
+  }, [user, formData]);
 
-  return { formData, updateFormField, saveProfile, isUpdating };
+  return {
+    formData,
+    updateFormField,
+    setProfileData,
+    saveProfile,
+    isUpdating,
+  };
 };

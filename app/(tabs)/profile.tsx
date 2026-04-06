@@ -1,14 +1,4 @@
-// ------------------------------------------------------
-// ProfileScreen.tsx — PERFIL PRÓPRIO IG STYLE + EDIT PROFILE + POST MODAL
-// HEADER SCROLLÁVEL
-// DARK MODE DINÂMICO
-// BOTÃO EDITAR → MODAL COM FOTO DE PERFIL
-// USERNAME ABAIXO DO DISPLAY NAME
-// POST → ABRIR MODAL AO CLICAR
-// BOTÃO SAIR ADICIONADO
-// BIO + VERIFICADO ADICIONADOS
-// ------------------------------------------------------
-
+// ProfileScreen.tsx
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   View,
@@ -18,101 +8,171 @@ import {
   Animated,
   StatusBar,
   Modal,
-  Pressable,
-  TextInput,
-  useColorScheme,
+  FlatList,
+  Image,
+  ActivityIndicator,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useUser, useClerk } from "@clerk/clerk-expo";
 import { Feather } from "@expo/vector-icons";
+import { useFocusEffect } from "@react-navigation/native";
+import { useRouter } from "expo-router";
 
 import PostsList from "@/components/PostsList";
 import { useProfile } from "@/hooks/useProfile";
 
 const HEADER_OFFSET = 10;
+const API_URL = "https://backend-social-app-1.onrender.com";
+
+type FollowUser = {
+  id: string;
+  username: string;
+  displayName: string;
+  avatar: string;
+};
 
 export default function ProfileScreen() {
   const { user } = useUser();
-  const { signOut } = useClerk();
-  const { formData, updateFormField, saveProfile } = useProfile();
-
+  const clerk = useClerk();
+  const router = useRouter();
+  const { formData, updateFormField } = useProfile();
   const insets = useSafeAreaInsets();
-  const colorScheme = useColorScheme();
-  const isDarkMode = colorScheme === "dark";
 
-  const [showEditModal, setShowEditModal] = useState(false);
-  const [selectedPost, setSelectedPost] = useState<any>(null);
-  const [showPostModal, setShowPostModal] = useState(false);
-
+  // ------------------- STATES -------------------
+  const [postsCount, setPostsCount] = useState(0);
+  const [followers, setFollowers] = useState<FollowUser[]>([]);
+  const [following, setFollowing] = useState<FollowUser[]>([]);
+  const [loadingFollow, setLoadingFollow] = useState(false);
+  const [showFollowModal, setShowFollowModal] = useState(false);
+  const [followType, setFollowType] = useState<"followers" | "following">("followers");
   const imageOpacity = useRef(new Animated.Value(0)).current;
 
-  const loadFromClerk = useCallback(async () => {
+  // ------------------- LOAD CLERK -------------------
+  const loadFromClerk = useCallback(() => {
     if (!user) return;
-
-    updateFormField(
-      "username",
-      (user.unsafeMetadata?.username as string) || user.username || ""
-    );
-
-    updateFormField(
-      "firstName",
-      (user.unsafeMetadata?.displayName as string) || user.firstName || ""
-    );
-
-    updateFormField(
-      "bio",
-      (user.unsafeMetadata?.bio as string) || ""
-    );
-
-    updateFormField(
-      "verified",
-      !!user.unsafeMetadata?.verified
-    );
+    updateFormField("username", user.username || "");
+    updateFormField("firstName", user.firstName || "");
+    updateFormField("avatar", user.imageUrl || "");
   }, [user]);
 
   useEffect(() => {
     loadFromClerk();
   }, [loadFromClerk]);
 
+  // ------------------- FETCH FOLLOWERS -------------------
+  const fetchFollowers = useCallback(async () => {
+    if (!user) return;
+    setLoadingFollow(true);
+    try {
+      const res = await fetch(`${API_URL}/followers/${user.id}`);
+      const data: FollowUser[] = await res.json();
+      setFollowers(data);
+    } catch (err) {
+      console.log("Erro ao buscar seguidores:", err);
+    } finally {
+      setLoadingFollow(false);
+    }
+  }, [user]);
+
+  const fetchFollowing = useCallback(async () => {
+    if (!user) return;
+    setLoadingFollow(true);
+    try {
+      const res = await fetch(`${API_URL}/following/${user.id}`);
+      const data: FollowUser[] = await res.json();
+      setFollowing(data);
+    } catch (err) {
+      console.log("Erro ao buscar seguindo:", err);
+    } finally {
+      setLoadingFollow(false);
+    }
+  }, [user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchFollowers();
+      fetchFollowing();
+      fetchPostsCount();
+    }, [fetchFollowers, fetchFollowing])
+  );
+
+  // ------------------- POSTS COUNT -------------------
+  const fetchPostsCount = useCallback(async () => {
+    if (!user) return;
+    try {
+      const res = await fetch(`${API_URL}/users/${user.id}`);
+      const data = await res.json();
+      setPostsCount(data.posts || 0);
+    } catch (err) {
+      console.log("Erro ao buscar contador de posts:", err);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    fetchPostsCount();
+  }, [fetchPostsCount]);
+
+  // ------------------- HANDLERS -------------------
+  const handleFollowClick = (type: "followers" | "following") => {
+    if (type === "followers") fetchFollowers();
+    else fetchFollowing();
+    setFollowType(type);
+    setShowFollowModal(true);
+  };
+
+  const handleSignOut = async () => {
+    let logOutput = "==== LOG DE LOGOUT ====\n";
+    try {
+      logOutput += "Botão Sair clicado!\n";
+
+      await clerk.signOut();
+      logOutput += "Logout realizado com sucesso!\n";
+
+      router.replace("/(auth)");
+
+      logOutput += "Navegou para (auth)/index.tsx.\n";
+    } catch (err) {
+      logOutput += `Erro ao tentar sair: ${err}\n`;
+    } finally {
+      logOutput += "====================\n";
+      console.log(logOutput);
+    }
+  };
+
+  // ------------------- RENDER -------------------
   return (
-    <View style={{ flex: 1, backgroundColor: isDarkMode ? "#000" : "#fff" }}>
-      <StatusBar
-        barStyle={isDarkMode ? "light-content" : "dark-content"}
-        backgroundColor={isDarkMode ? "#000" : "#fff"}
-      />
+    <View style={{ flex: 1, backgroundColor: "#fff" }}>
+      <StatusBar barStyle="dark-content" />
 
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* HEADER */}
         <View
           style={{
             flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "center",
-            paddingTop: insets.top + HEADER_OFFSET,
+            justifyContent: "space-between",
             paddingHorizontal: 16,
+            paddingTop: insets.top + HEADER_OFFSET,
           }}
         >
-          <Text
+          <Text />
+          <TouchableOpacity
+            onPress={handleSignOut}
             style={{
-              fontSize: 18,
-              fontWeight: "600",
-              color: isDarkMode ? "#fff" : "#000",
+              paddingVertical: 4,
+              paddingHorizontal: 12,
+              borderRadius: 8,
+              backgroundColor: "#eee",
             }}
           >
-            Perfil
-          </Text>
+            <Text style={{ color: "#000", fontWeight: "600" }}>Sair</Text>
+          </TouchableOpacity>
         </View>
 
-        {/* PROFILE INFO */}
+        {/* PROFILE */}
         <View style={{ paddingHorizontal: 16, marginTop: 16, alignItems: "center" }}>
           <Animated.Image
-            source={{ uri: user?.imageUrl || undefined }}
-            style={{
-              width: 96,
-              height: 96,
-              borderRadius: 48,
-              opacity: imageOpacity,
-            }}
+            source={{ uri: formData.avatar }}
+            style={{ width: 96, height: 96, borderRadius: 48, opacity: imageOpacity }}
             onLoad={() =>
               Animated.timing(imageOpacity, {
                 toValue: 1,
@@ -122,51 +182,23 @@ export default function ProfileScreen() {
             }
           />
 
-          <View style={{ flexDirection: "row", alignItems: "center", marginTop: 12 }}>
-            <Text
-              style={{
-                fontSize: 16,
-                fontWeight: "600",
-                color: isDarkMode ? "#fff" : "#000",
-              }}
-            >
-              {formData.firstName || "Usuário"}
-            </Text>
-            {formData.verified && (
-              <Feather
-                name="check-circle"
-                size={16}
-                color="#1DA1F2"
-                style={{ marginLeft: 6 }}
-              />
-            )}
-          </View>
+          <Text style={{ fontSize: 16, fontWeight: "600", color: "#000", marginTop: 12 }}>
+            {formData.firstName || "Usuário"}
+          </Text>
 
-          {formData.username ? (
-            <Text
-              style={{
-                fontSize: 13,
-                color: isDarkMode ? "#ccc" : "#666",
-                marginBottom: 8,
-              }}
-            >
-              @{formData.username}
-            </Text>
-          ) : null}
-
-          {/* BIO */}
-          {formData.bio ? (
-            <Text
-              style={{
-                fontSize: 14,
-                color: isDarkMode ? "#ccc" : "#444",
-                textAlign: "center",
-                marginBottom: 12,
-              }}
-            >
-              {formData.bio}
-            </Text>
-          ) : null}
+          {/* EDIT PROFILE BUTTON */}
+          <TouchableOpacity
+            onPress={() => router.push("/EditProfile")}
+            style={{
+              marginTop: 12,
+              paddingVertical: 6,
+              paddingHorizontal: 16,
+              borderRadius: 8,
+              backgroundColor: "#eee",
+            }}
+          >
+            <Text style={{ color: "#000", fontWeight: "600" }}>Editar Perfil</Text>
+          </TouchableOpacity>
 
           {/* STATS */}
           <View
@@ -174,249 +206,77 @@ export default function ProfileScreen() {
               flexDirection: "row",
               justifyContent: "space-between",
               width: "80%",
-              marginBottom: 12,
+              marginVertical: 12,
             }}
           >
-            {[{ label: "posts", value: 176 }, { label: "seguidores", value: 1234 }, { label: "seguindo", value: 567 }].map(
-              (item) => (
-                <View key={item.label} style={{ alignItems: "center", flex: 1 }}>
-                  <Text
-                    style={{
-                      fontSize: 18,
-                      fontWeight: "700",
-                      color: isDarkMode ? "#fff" : "#000",
-                    }}
-                  >
-                    {item.value}
-                  </Text>
-                  <Text
-                    style={{
-                      fontSize: 12,
-                      color: isDarkMode ? "#aaa" : "#666",
-                    }}
-                  >
-                    {item.label}
-                  </Text>
-                </View>
-              )
-            )}
+            {[
+              { label: "posts", value: postsCount },
+              { label: "seguidores", value: followers.length, type: "followers" },
+              { label: "seguindo", value: following.length, type: "following" },
+            ].map((item) => (
+              <TouchableOpacity
+                key={item.label}
+                style={{ alignItems: "center", flex: 1 }}
+                disabled={!item.type}
+                onPress={() => item.type && handleFollowClick(item.type)}
+              >
+                <Text style={{ fontSize: 18, fontWeight: "700", color: "#000" }}>{item.value}</Text>
+                <Text style={{ fontSize: 12, color: "#666" }}>{item.label}</Text>
+              </TouchableOpacity>
+            ))}
           </View>
-
-          {/* BOTÃO EDITAR PERFIL */}
-          <TouchableOpacity
-            onPress={() => setShowEditModal(true)}
-            style={{
-              paddingVertical: 6,
-              paddingHorizontal: 24,
-              borderWidth: 1,
-              borderColor: isDarkMode ? "#fff" : "#000",
-              borderRadius: 20,
-              marginBottom: 8,
-            }}
-          >
-            <Text style={{ color: isDarkMode ? "#fff" : "#000", fontWeight: "600" }}>
-              Editar Perfil
-            </Text>
-          </TouchableOpacity>
-
-          {/* BOTÃO SAIR */}
-          <TouchableOpacity
-            onPress={() => signOut()}
-            style={{
-              paddingVertical: 6,
-              paddingHorizontal: 24,
-              borderWidth: 1,
-              borderColor: "red",
-              borderRadius: 20,
-            }}
-          >
-            <Text style={{ color: "red", fontWeight: "600" }}>Sair</Text>
-          </TouchableOpacity>
         </View>
 
-        {/* DIVIDER */}
-        <View
-          style={{
-            height: 1,
-            backgroundColor: isDarkMode ? "#333" : "#ddd",
-            marginTop: 16,
-          }}
-        />
-
-        {/* FEED DE POSTS */}
-        <PostsList
-          username={formData.username}
-          isGrid
-          type="posts"
-          darkMode={isDarkMode}
-          onPressPost={(post) => {
-            setSelectedPost(post);
-            setShowPostModal(true);
-          }}
-        />
+        {/* POSTS */}
+        {user ? (
+          <PostsList username={user.id} showNewPostButton={false} />
+        ) : (
+          <ActivityIndicator size="large" color="#000" style={{ marginTop: 24 }} />
+        )}
       </ScrollView>
 
-      {/* MODAL EDITAR PERFIL */}
-      <Modal visible={showEditModal} transparent animationType="fade">
-        <Pressable
-          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.4)" }}
-          onPress={() => setShowEditModal(false)}
-        >
+      {/* FOLLOW MODAL */}
+      <Modal visible={showFollowModal} animationType="slide">
+        <View style={{ flex: 1, backgroundColor: "#fff" }}>
           <View
             style={{
-              position: "absolute",
-              top: insets.top + 60,
-              left: 20,
-              right: 20,
-              padding: 16,
-              backgroundColor: isDarkMode ? "#111" : "#fff",
-              borderRadius: 12,
+              flexDirection: "row",
               alignItems: "center",
+              justifyContent: "space-between",
+              padding: 16,
             }}
           >
-            <Text
-              style={{
-                fontSize: 16,
-                fontWeight: "600",
-                color: isDarkMode ? "#fff" : "#000",
-                marginBottom: 12,
-              }}
-            >
-              Editar Perfil
+            <TouchableOpacity onPress={() => setShowFollowModal(false)}>
+              <Feather name="arrow-left" size={22} color="#000" />
+            </TouchableOpacity>
+
+            <Text style={{ fontSize: 16, fontWeight: "600", color: "#000" }}>
+              {followType === "followers" ? "Seguidores" : "Seguindo"}
             </Text>
 
-            <TouchableOpacity>
-              <Animated.Image
-                source={{ uri: user?.imageUrl || undefined }}
-                style={{
-                  width: 96,
-                  height: 96,
-                  borderRadius: 48,
-                  marginBottom: 12,
-                }}
-              />
-            </TouchableOpacity>
-
-            <TextInput
-              placeholder="Nome"
-              placeholderTextColor={isDarkMode ? "#555" : "#aaa"}
-              value={formData.firstName}
-              onChangeText={(text) => updateFormField("firstName", text)}
-              style={{
-                borderWidth: 1,
-                borderColor: isDarkMode ? "#333" : "#ddd",
-                padding: 10,
-                borderRadius: 8,
-                color: isDarkMode ? "#fff" : "#000",
-                marginBottom: 8,
-                width: "100%",
-              }}
-            />
-
-            <TextInput
-              placeholder="Username"
-              placeholderTextColor={isDarkMode ? "#555" : "#aaa"}
-              value={formData.username}
-              onChangeText={(text) => updateFormField("username", text)}
-              style={{
-                borderWidth: 1,
-                borderColor: isDarkMode ? "#333" : "#ddd",
-                padding: 10,
-                borderRadius: 8,
-                color: isDarkMode ? "#fff" : "#000",
-                marginBottom: 8,
-                width: "100%",
-              }}
-            />
-
-            <TextInput
-              placeholder="Biografia"
-              placeholderTextColor={isDarkMode ? "#555" : "#aaa"}
-              value={formData.bio}
-              onChangeText={(text) => updateFormField("bio", text)}
-              multiline
-              style={{
-                borderWidth: 1,
-                borderColor: isDarkMode ? "#333" : "#ddd",
-                padding: 10,
-                borderRadius: 8,
-                color: isDarkMode ? "#fff" : "#000",
-                marginBottom: 12,
-                width: "100%",
-                minHeight: 60,
-              }}
-            />
-
-            <TouchableOpacity
-              onPress={async () => {
-                await saveProfile();
-                setShowEditModal(false);
-              }}
-              style={{
-                paddingVertical: 10,
-                backgroundColor: isDarkMode ? "#fff" : "#000",
-                borderRadius: 8,
-                alignItems: "center",
-                width: "100%",
-              }}
-            >
-              <Text style={{ color: isDarkMode ? "#000" : "#fff", fontWeight: "600" }}>
-                Salvar
-              </Text>
-            </TouchableOpacity>
+            <View style={{ width: 22 }} />
           </View>
-        </Pressable>
-      </Modal>
 
-      {/* MODAL POST */}
-      <Modal visible={showPostModal} transparent animationType="fade">
-        <Pressable
-          style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)" }}
-          onPress={() => setShowPostModal(false)}
-        >
-          <View
-            style={{
-              position: "absolute",
-              top: insets.top + 60,
-              left: 20,
-              right: 20,
-              backgroundColor: isDarkMode ? "#111" : "#fff",
-              borderRadius: 12,
-              padding: 16,
-              alignItems: "center",
-            }}
-          >
-            {selectedPost && (
-              <>
-                <Animated.Image
-                  source={{ uri: selectedPost.imageUrl }}
-                  style={{ width: "100%", height: 300, borderRadius: 12 }}
-                />
-
-                <Text
-                  style={{
-                    marginTop: 12,
-                    fontSize: 16,
-                    fontWeight: "600",
-                    color: isDarkMode ? "#fff" : "#000",
-                  }}
-                >
-                  {selectedPost.title || "Post"}
-                </Text>
-
-                <Text
-                  style={{
-                    marginTop: 4,
-                    fontSize: 14,
-                    color: isDarkMode ? "#ccc" : "#444",
-                  }}
-                >
-                  {selectedPost.description || ""}
-                </Text>
-              </>
-            )}
-          </View>
-        </Pressable>
+          {loadingFollow ? (
+            <ActivityIndicator size="large" color="#000" style={{ marginTop: 24 }} />
+          ) : (
+            <FlatList
+              data={followType === "followers" ? followers : following}
+              keyExtractor={(item) => item.id}
+              renderItem={({ item }) => (
+                <View style={{ flexDirection: "row", alignItems: "center", padding: 12 }}>
+                  <Image
+                    source={{ uri: item.avatar || "https://via.placeholder.com/40" }}
+                    style={{ width: 40, height: 40, borderRadius: 20, marginRight: 12 }}
+                  />
+                  <View>
+                    <Text style={{ color: "#000", fontWeight: "600" }}>{item.displayName}</Text>
+                  </View>
+                </View>
+              )}
+            />
+          )}
+        </View>
       </Modal>
     </View>
   );

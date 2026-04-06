@@ -1,5 +1,4 @@
-// src/screens/ConversationsScreen.tsx
-import React, { useCallback, useState, useRef, useEffect } from "react";
+import React, { useCallback, useEffect, useState, useRef } from "react";
 import {
   View,
   Text,
@@ -12,482 +11,331 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
-  Keyboard,
-  InteractionManager,
 } from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Feather } from "@expo/vector-icons";
-import { useNavigation, useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect } from "@react-navigation/native";
 import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
-import * as ImagePicker from "expo-image-picker";
+import { io } from "socket.io-client";
 
-type User = {
-  id: string;
-  username: string;
-  displayName?: string;
-  avatar?: string | null;
-};
+const API_URL = "https://backend-social-app-1.onrender.com"; 
+const socket = io(API_URL, { transports: ["websocket"] });
 
 type Message = {
-  id: string;
+  _id: string;
   senderId: string;
   receiverId: string;
   content: string;
-  timestamp: string;
-  read: boolean;
-  imageUri?: string | null;
+  createdAt: string;
 };
 
-type Conversation = {
-  user: User;
-  lastMessage?: Message;
-  unreadCount: number;
+type User = {
+  clerkId: string;
+  username: string;
+  displayName?: string;
+  avatar?: string;
+  lastMessage?: Message | null;
+  unread?: boolean;
+  messages?: Message[];
 };
 
-type RootStackParamList = {
-  ChatScreen: { loggedUser: User; chatUser: User };
-  UserProfileScreen: { userId: string };
-  ConversationsScreen: undefined;
+// Função auxiliar para logar erros juntos
+const logError = (context: string, err?: any, res?: Response) => {
+  console.error("🛑 [ERRO]", context);
+  if (res) console.error("Status:", res.status, res.statusText);
+  if (err) console.error("Detalhes:", err);
 };
-
-type NavProp = NativeStackNavigationProp<
-  RootStackParamList,
-  "ConversationsScreen"
->;
 
 export default function ConversationsScreen() {
-  const navigation = useNavigation<NavProp>();
   const { currentUser } = useCurrentUser();
   const insets = useSafeAreaInsets();
 
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [modalVisible, setModalVisible] = useState(false);
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
-
-  const [chatModalVisible, setChatModalVisible] = useState(false);
-  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
+  const [users, setUsers] = useState<User[]>([]);
+  const [chatVisible, setChatVisible] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [inputText, setInputText] = useState<string>("");
-  const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [inputText, setInputText] = useState("");
 
   const flatListRef = useRef<FlatList>(null);
 
-  const getConversationKey = useCallback(
-    (a: string, b: string) => `conversation_${[a, b].sort().join("_")}`,
-    []
-  );
-
-  const confirmDeleteConversation = (userId: string) => {
-    setSelectedUserId(userId);
-    setModalVisible(true);
-  };
-
-  const loadConversationMessages = useCallback(
-    async (userId: string) => {
-      if (!currentUser) return [];
-      try {
-        const key = getConversationKey(currentUser.id, userId);
-        const stored = await AsyncStorage.getItem(key);
-        if (!stored) return [];
-        const msgs: Message[] = JSON.parse(stored) || [];
-        return msgs.sort(
-          (a, b) =>
-            new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-        );
-      } catch {
-        return [];
-      }
-    },
-    [currentUser]
-  );
-
-  const getUsersFromConversations = useCallback(async (): Promise<User[]> => {
-    if (!currentUser) return [];
-    const keys = await AsyncStorage.getAllKeys();
-    const convoKeys = keys.filter((k) => k.startsWith("conversation_"));
-
-    const users: User[] = [];
-
-    for (const key of convoKeys) {
-      const raw = await AsyncStorage.getItem(key);
-      if (!raw) continue;
-      const msgs: Message[] = JSON.parse(raw) || [];
-      if (!msgs.length) continue;
-
-      const m = msgs[0];
-      const chatUserId =
-        m.senderId === currentUser.id ? m.receiverId : m.senderId;
-
-      const uRaw = await AsyncStorage.getItem(`clerk_user_${chatUserId}`);
-      if (uRaw) users.push(JSON.parse(uRaw));
-    }
-
-    return users.filter(
-      (u, i, arr) => i === arr.findIndex((x) => x.id === u.id)
-    );
+  // Conectar socket
+  useEffect(() => {
+    if (!currentUser) return;
+    console.log("🔌 Conectando socket para usuário:", currentUser.id);
+    socket.emit("join", currentUser.id);
   }, [currentUser]);
 
-  const loadConversations = useCallback(async () => {
+  // Receber mensagens em tempo real
+  useEffect(() => {
     if (!currentUser) return;
 
-    const users = await getUsersFromConversations();
+    const handleMessage = (msg: Message) => {
+      console.log("📩 Mensagem recebida:", msg);
 
-    const data = await Promise.all(
-      users.map(async (u) => {
-        const msgs = await loadConversationMessages(u.id);
-        const last = msgs[msgs.length - 1];
-        const unread = msgs.filter(
-          (m) => m.receiverId === currentUser.id && !m.read
-        ).length;
+      const otherUserId =
+        msg.senderId === currentUser.id ? msg.receiverId : msg.senderId;
 
-        return {
-          user: u,
-          lastMessage: last,
-          unreadCount: unread,
-        };
-      })
-    );
+      setUsers((prev) => {
+        const userExists = prev.find((u) => u.clerkId === otherUserId);
+        if (userExists) {
+          return prev
+            .map((u) =>
+              u.clerkId === otherUserId
+                ? {
+                    ...u,
+                    lastMessage: msg,
+                    unread: selectedUser?.clerkId !== otherUserId,
+                    messages: [...(u.messages || []), msg],
+                  }
+                : u
+            )
+            .sort((a, b) => {
+              const aTime = a.lastMessage
+                ? new Date(a.lastMessage.createdAt).getTime()
+                : 0;
+              const bTime = b.lastMessage
+                ? new Date(b.lastMessage.createdAt).getTime()
+                : 0;
+              return bTime - aTime;
+            });
+        } else {
+          return [
+            {
+              clerkId: otherUserId,
+              username: "Usuário",
+              displayName: "Usuário",
+              lastMessage: msg,
+              unread: selectedUser?.clerkId !== otherUserId,
+              messages: [msg],
+            },
+            ...prev,
+          ];
+        }
+      });
 
-    data.sort((a, b) => {
-      const ta = a.lastMessage
-        ? new Date(a.lastMessage.timestamp).getTime()
-        : 0;
-      const tb = b.lastMessage
-        ? new Date(b.lastMessage.timestamp).getTime()
-        : 0;
-      return tb - ta;
-    });
+      if (
+        selectedUser &&
+        (msg.senderId === selectedUser.clerkId ||
+          msg.receiverId === selectedUser.clerkId)
+      ) {
+        setMessages((prev) => [...prev, msg]);
+      }
+    };
 
-    setConversations(data);
+    socket.on("message", handleMessage);
+    socket.on("connect_error", (err) => logError("Erro Socket.IO", err));
+    return () => socket.off("message", handleMessage);
+  }, [currentUser, selectedUser]);
+
+  // Carrega histórico de usuários
+  const loadUsers = useCallback(async () => {
+    if (!currentUser) return;
+    console.log("🔄 Carregando usuários...");
+
+    try {
+      const res = await fetch(`${API_URL}/users?exclude=${currentUser.id}`);
+      if (!res.ok) return logError("Erro ao buscar usuários", null, res);
+
+      const data: User[] = await res.json();
+      console.log("✅ Usuários carregados:", data.length);
+
+      const usersWithLast = await Promise.all(
+        data.map(async (user) => {
+          try {
+            const resMsg = await fetch(
+              `${API_URL}/messages?user1=${currentUser.id}&user2=${user.clerkId}`
+            );
+            if (!resMsg.ok) return logError(`Erro mensagens ${user.username}`, null, resMsg);
+
+            const msgs: Message[] = await resMsg.json();
+            const last = msgs[msgs.length - 1];
+
+            return {
+              ...user,
+              lastMessage: last || null,
+              messages: msgs || [],
+              unread: false,
+            };
+          } catch (err) {
+            logError(`Erro fetch mensagens ${user.username}`, err);
+            return { ...user, lastMessage: null, messages: [], unread: false };
+          }
+        })
+      );
+
+      setUsers(
+        usersWithLast
+          .filter((u) => u.messages && u.messages.length > 0)
+          .sort((a, b) => {
+            const aTime = a.lastMessage ? new Date(a.lastMessage.createdAt).getTime() : 0;
+            const bTime = b.lastMessage ? new Date(b.lastMessage.createdAt).getTime() : 0;
+            return bTime - aTime;
+          })
+      );
+    } catch (err) {
+      logError("Erro loadUsers", err);
+    }
   }, [currentUser]);
 
-  useFocusEffect(
-    useCallback(() => {
-      if (currentUser) {
-        loadConversations();
-      }
-    }, [currentUser])
-  );
+  const loadMessages = async (user: User) => {
+    if (!currentUser) return;
+    try {
+      const res = await fetch(
+        `${API_URL}/messages?user1=${currentUser.id}&user2=${user.clerkId}`
+      );
+      if (!res.ok) return logError("Erro ao buscar mensagens", null, res);
 
-  const openChatModal = async (conversation: Conversation) => {
-    setSelectedConversation(conversation);
-    if (currentUser) {
-      const msgs = await loadConversationMessages(conversation.user.id);
-      setMessages(msgs);
-    }
-    setChatModalVisible(true);
-  };
-
-  // Scroll automático ao enviar/receber mensagem ou abrir chat
-  useEffect(() => {
-    if (flatListRef.current && messages.length > 0) {
-      InteractionManager.runAfterInteractions(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      });
-    }
-  }, [messages, chatModalVisible]);
-
-  // Scroll automático ao abrir teclado
-  useEffect(() => {
-    const showSub = Keyboard.addListener("keyboardDidShow", () => {
-      InteractionManager.runAfterInteractions(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      });
-    });
-
-    return () => showSub.remove();
-  }, []);
-
-  const pickImage = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      quality: 0.7,
-    });
-
-    if (!result.canceled && result.assets.length > 0) {
-      setSelectedImage(result.assets[0].uri);
+      const data: Message[] = await res.json();
+      console.log(`📥 Mensagens carregadas para ${user.username}:`, data.length);
+      setMessages(data);
+    } catch (err) {
+      logError("Erro loadMessages", err);
     }
   };
 
   const sendMessage = async () => {
-    if (!currentUser || !selectedConversation || (!inputText.trim() && !selectedImage)) return;
+    if (!currentUser || !selectedUser || !inputText.trim()) return;
 
-    const newMsg: Message = {
-      id: Date.now().toString(),
+    const body = {
       senderId: currentUser.id,
-      receiverId: selectedConversation.user.id,
+      receiverId: selectedUser.clerkId,
       content: inputText,
-      timestamp: new Date().toISOString(),
-      read: false,
-      imageUri: selectedImage || null,
     };
 
-    const key = getConversationKey(currentUser.id, selectedConversation.user.id);
-    const updatedMessages = [...messages, newMsg];
-    await AsyncStorage.setItem(key, JSON.stringify(updatedMessages));
-
-    setMessages(updatedMessages);
-    setInputText("");
-    setSelectedImage(null);
-    loadConversations();
+    try {
+      const res = await fetch(`${API_URL}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) return logError("Erro ao enviar mensagem", null, res);
+      console.log("📤 Mensagem enviada:", body);
+      setInputText("");
+    } catch (err) {
+      logError("Erro sendMessage", err);
+    }
   };
 
-  const deleteMessage = async (messageId: string) => {
-    if (!currentUser || !selectedConversation) return;
+  useFocusEffect(
+    useCallback(() => {
+      loadUsers();
+    }, [loadUsers])
+  );
 
-    const key = getConversationKey(currentUser.id, selectedConversation.user.id);
-    const updatedMessages = messages.filter((m) => m.id !== messageId);
+  const openChat = (user: User) => {
+    console.log("💬 Abrindo chat com:", user.username);
+    setSelectedUser(user);
+    setChatVisible(true);
 
-    await AsyncStorage.setItem(key, JSON.stringify(updatedMessages));
-    setMessages(updatedMessages);
-    loadConversations();
-  };
+    if (user.messages && user.messages.length > 0) {
+      setMessages(user.messages);
+    } else {
+      loadMessages(user);
+    }
 
-  const formatDate = (iso: string) => {
-    const d = new Date(iso);
-    const today = new Date();
-    if (
-      d.getDate() === today.getDate() &&
-      d.getMonth() === today.getMonth() &&
-      d.getFullYear() === today.getFullYear()
-    ) return "Hoje";
-
-    const yesterday = new Date();
-    yesterday.setDate(today.getDate() - 1);
-    if (
-      d.getDate() === yesterday.getDate() &&
-      d.getMonth() === yesterday.getMonth() &&
-      d.getFullYear() === yesterday.getFullYear()
-    ) return "Ontem";
-
-    return d.toLocaleDateString();
-  };
-
-  const renderItem = ({ item }: { item: Conversation }) => {
-    const unread = item.unreadCount > 0;
-
-    return (
-      <TouchableOpacity
-        style={styles.conversationItem}
-        activeOpacity={0.7}
-        onPress={() => openChatModal(item)}
-        onLongPress={() => confirmDeleteConversation(item.user.id)}
-      >
-        {item.user.avatar ? (
-          <Image source={{ uri: item.user.avatar }} style={styles.avatar} />
-        ) : (
-          <View style={styles.avatarPlaceholder}>
-            <Feather name="user" size={22} color="#999" />
-          </View>
-        )}
-
-        <View style={styles.content}>
-          <Text style={[styles.name, unread && styles.nameUnread]}>
-            {(item.user.displayName || item.user.username).split(" ")[0]}
-          </Text>
-          <Text
-            numberOfLines={1}
-            style={[styles.lastMsg, unread && styles.lastMsgUnread]}
-          >
-            {item.lastMessage?.content || (item.lastMessage?.imageUri ? "📷 Imagem" : "Nenhuma mensagem")}
-          </Text>
-        </View>
-
-        {unread && (
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>
-              {item.unreadCount > 99 ? "99+" : item.unreadCount}
-            </Text>
-          </View>
-        )}
-      </TouchableOpacity>
+    setUsers((prev) =>
+      prev.map((u) =>
+        u.clerkId === user.clerkId ? { ...u, unread: false } : u
+      )
     );
   };
 
-  // Lista de mensagens com separadores de data
-  const messagesWithDates: any[] = [];
-  let lastDate = "";
-  messages.forEach((msg) => {
-    const msgDate = new Date(msg.timestamp).toDateString();
-    if (msgDate !== lastDate) {
-      messagesWithDates.push({ type: "separator", id: `sep-${msgDate}`, date: msg.timestamp });
-      lastDate = msgDate;
-    }
-    messagesWithDates.push({ ...msg, type: "message" });
-  });
+  const getDisplayName = (user: User | null) =>
+    user?.displayName || user?.username || currentUser?.fullName || "Usuário";
+
+  const getAvatar = (user: User | null) =>
+    user?.avatar || currentUser?.profileImageUrl || null;
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <View style={[styles.header, { paddingTop: insets.top + 25 }]}>
-        <Text style={styles.headerTitle}>Mensagens</Text>
-      </View>
+      <Text
+        style={[styles.headerTitle, { paddingTop: insets.top + 20, paddingHorizontal: 16 }]}
+      >
+        Mensagens
+      </Text>
 
-      {/* Conversas */}
       <FlatList
-        data={conversations}
-        keyExtractor={(i) => i.user.id}
-        renderItem={renderItem}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 20 }}
-        ListEmptyComponent={
-          <View style={styles.centered}>
-            <Text style={{ color: "#999" }}>Nenhuma conversa</Text>
+        data={users}
+        keyExtractor={(i) => i.clerkId}
+        renderItem={({ item }) => (
+          <View style={styles.userItem}>
+            <TouchableOpacity
+              style={{ flexDirection: "row", alignItems: "center", flex: 1 }}
+              onPress={() => openChat(item)}
+            >
+              {getAvatar(item) ? (
+                <Image source={{ uri: getAvatar(item) }} style={styles.avatar} />
+              ) : (
+                <View style={styles.avatarPlaceholder}>
+                  <Feather name="user" size={22} color="#999" />
+                </View>
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.name}>{getDisplayName(item)}</Text>
+                {item.lastMessage && (
+                  <Text style={styles.lastMessage} numberOfLines={1}>
+                    {item.lastMessage.content}
+                  </Text>
+                )}
+              </View>
+            </TouchableOpacity>
           </View>
-        }
+        )}
       />
 
-      {/* Modal de exclusão */}
-      <Modal
-        visible={modalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setModalVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContainer}>
-            <Text style={styles.modalTitle}>Apagar conversa?</Text>
-            <Text style={styles.modalMessage}>
-              Deseja realmente apagar toda a conversa?
-            </Text>
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.cancelButton]}
-                onPress={() => setModalVisible(false)}
-              >
-                <Text style={styles.cancelText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalButton, styles.deleteButton]}
-                onPress={async () => {
-                  if (!currentUser || !selectedUserId) return;
-                  const key = getConversationKey(currentUser.id, selectedUserId);
-                  await AsyncStorage.removeItem(key);
-                  setModalVisible(false);
-                  loadConversations();
-                }}
-              >
-                <Text style={styles.deleteText}>Apagar</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Modal de chat */}
-      <Modal
-        visible={chatModalVisible}
-        transparent={false}
-        animationType="slide"
-        onRequestClose={() => setChatModalVisible(false)}
-      >
+      {/* Modal do Chat */}
+      <Modal visible={chatVisible} animationType="slide">
         <KeyboardAvoidingView
-          style={styles.fullScreenModal}
+          style={{ flex: 1 }}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
-          {/* Header chat */}
           <View style={styles.chatHeader}>
-            <TouchableOpacity
-              onPress={() => setChatModalVisible(false)}
-              style={{ marginRight: 8, paddingVertical: 2 }}
-            >
-              <Feather name="arrow-left" size={20} color="#000" />
+            <TouchableOpacity onPress={() => setChatVisible(false)}>
+              <Feather name="arrow-left" size={20} />
             </TouchableOpacity>
 
-            {selectedConversation?.user.avatar ? (
-              <Image
-                source={{ uri: selectedConversation.user.avatar }}
-                style={styles.chatAvatar}
-              />
-            ) : (
-              <View style={styles.chatAvatarPlaceholder}>
-                <Feather name="user" size={18} color="#999" />
-              </View>
+            {selectedUser && getAvatar(selectedUser) && (
+              <Image source={{ uri: getAvatar(selectedUser) }} style={styles.avatar} />
             )}
 
-            <Text style={[styles.modalTitle, { marginLeft: 6 }]}>
-              {selectedConversation?.user.displayName || selectedConversation?.user.username}
-            </Text>
+            <Text style={styles.chatTitle}>{getDisplayName(selectedUser)}</Text>
           </View>
 
-          {/* Preview imagem */}
-          {selectedImage && (
-            <View style={{ marginBottom: 8, alignItems: 'flex-start' }}>
-              <Image
-                source={{ uri: selectedImage }}
-                style={{ width: 120, height: 120, borderRadius: 12 }}
-              />
-            </View>
-          )}
-
-          {/* Lista de mensagens */}
           <FlatList
             ref={flatListRef}
-            data={messagesWithDates}
-            keyExtractor={(item) => item.id}
-            style={{ flex: 1 }}
-            contentContainerStyle={{ padding: 10, paddingBottom: 60 }} // altura do input
-            renderItem={({ item, index }) => {
-              if (item.type === "separator") {
-                return (
-                  <View style={{ alignSelf: "center", marginVertical: 5 }}>
-                    <Text style={{ fontSize: 12, color: "#666" }}>{formatDate(item.date)}</Text>
-                  </View>
-                );
-              }
-
-              const isMine = item.senderId === currentUser?.id;
+            data={messages}
+            keyExtractor={(i) => i._id}
+            contentContainerStyle={{ padding: 10 }}
+            onContentSizeChange={() =>
+              flatListRef.current?.scrollToEnd({ animated: true })
+            }
+            renderItem={({ item }) => {
+              const isMe = item.senderId === currentUser?.id;
               return (
-                <TouchableOpacity
-                  onLongPress={() =>
-                    Alert.alert(
-                      "Apagar mensagem?",
-                      "Deseja realmente apagar esta mensagem?",
-                      [
-                        { text: "Cancelar", style: "cancel" },
-                        { text: "Apagar", style: "destructive", onPress: () => deleteMessage(item.id) },
-                      ]
-                    )
-                  }
+                <View
                   style={[
-                    styles.messageBubble,
-                    isMine ? styles.myMessage : styles.theirMessage,
-                    index === messagesWithDates.length - 1 ? { marginBottom: 0 } : { marginBottom: 3 },
+                    styles.bubble,
+                    {
+                      alignSelf: isMe ? "flex-end" : "flex-start",
+                      backgroundColor: isMe ? "#000" : "#e5e5e5",
+                    },
                   ]}
                 >
-                  {item.imageUri && (
-                    <Image
-                      source={{ uri: item.imageUri }}
-                      style={{ width: 150, height: 150, borderRadius: 12, marginBottom: 4 }}
-                      resizeMode="cover"
-                    />
-                  )}
-                  {item.content ? <Text style={{ color: "#000" }}>{item.content}</Text> : null}
-                  <Text style={styles.timestamp}>
-                    {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  </Text>
-                </TouchableOpacity>
+                  <Text style={{ color: isMe ? "#fff" : "#000" }}>{item.content}</Text>
+                </View>
               );
             }}
           />
 
-          {/* Input */}
-          <View style={styles.inputContainer}>
-            <TouchableOpacity onPress={pickImage} style={{ marginRight: 8 }}>
-              <Feather name="image" size={24} color="#000" />
-            </TouchableOpacity>
+          <View style={styles.inputRow}>
             <TextInput
               style={styles.input}
               placeholder="Digite uma mensagem..."
               value={inputText}
               onChangeText={setInputText}
-              multiline
             />
-            <TouchableOpacity style={styles.sendButton} onPress={sendMessage}>
-              <Feather name="send" size={20} color="#fff" />
+            <TouchableOpacity style={styles.send} onPress={sendMessage}>
+              <Feather name="send" size={18} color="#fff" />
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
@@ -498,38 +346,30 @@ export default function ConversationsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff" },
-  header: { backgroundColor: "#fff", paddingBottom: 16, paddingHorizontal: 16, borderBottomWidth: 0.5, borderBottomColor: "#e5e5e5", shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 3, elevation: 2 },
-  headerTitle: { fontSize: 24, fontWeight: "700", color: "#000" },
-  centered: { flex: 1, justifyContent: "center", alignItems: "center", marginTop: 40 },
-  conversationItem: { flexDirection: "row", padding: 16, alignItems: "center", backgroundColor: "#fff" },
+  headerTitle: { fontSize: 24, fontWeight: "700", marginBottom: 12 },
+  userItem: {
+    flexDirection: "row",
+    padding: 16,
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   avatar: { width: 50, height: 50, borderRadius: 25, marginRight: 14 },
-  avatarPlaceholder: { width: 50, height: 50, borderRadius: 25, backgroundColor: "#fff", borderWidth: 1, borderColor: "#e5e5e5", alignItems: "center", justifyContent: "center", marginRight: 14 },
-  content: { flex: 1 },
-  name: { fontSize: 16, fontWeight: "600", color: "#000" },
-  nameUnread: { fontWeight: "700" },
-  lastMsg: { color: "#666", marginTop: 2 },
-  lastMsgUnread: { color: "#000", fontWeight: "600" },
-  badge: { backgroundColor: "#000", minWidth: 22, height: 22, borderRadius: 11, alignItems: "center", justifyContent: "center" },
-  badgeText: { color: "#fff", fontSize: 12, fontWeight: "700" },
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
-  modalContainer: { backgroundColor: "#fff", borderRadius: 10, paddingVertical: 16, paddingHorizontal: 18, alignItems: "center" },
-  modalTitle: { fontSize: 16, fontWeight: "700", color: "#000", textAlign: "center" },
-  modalMessage: { fontSize: 13, color: "#666", marginBottom: 12, textAlign: "center" },
-  modalButtons: { flexDirection: "row", justifyContent: "space-between", width: "100%" },
-  modalButton: { flex: 1, paddingVertical: 10, borderRadius: 8, marginHorizontal: 4, alignItems: "center" },
-  cancelButton: { backgroundColor: "#e5e5e5" },
-  deleteButton: { backgroundColor: "#ff3b30" },
-  cancelText: { color: "#000", fontWeight: "600", fontSize: 14 },
-  deleteText: { color: "#fff", fontWeight: "600", fontSize: 14 },
-  fullScreenModal: { flex: 1, backgroundColor: "#fff", paddingTop: 5, paddingHorizontal: 10 },
-  chatHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8, width: '100%', paddingTop: Platform.OS === 'ios' ? 15 : 5 },
-  chatAvatar: { width: 35, height: 35, borderRadius: 17.5, marginRight: 10 },
-  chatAvatarPlaceholder: { width: 35, height: 35, borderRadius: 17.5, backgroundColor: "#e5e5e5", alignItems: "center", justifyContent: "center", marginRight: 10 },
-  messageBubble: { padding: 8, borderRadius: 12, maxWidth: '80%' },
-  myMessage: { backgroundColor: '#d1d1d1', alignSelf: 'flex-end', borderBottomRightRadius: 0 },
-  theirMessage: { backgroundColor: '#f0f0f0', alignSelf: 'flex-start', borderBottomLeftRadius: 0 },
-  timestamp: { fontSize: 10, color: '#888', marginTop: 2, textAlign: 'right' },
-  inputContainer: { flexDirection: 'row', alignItems: 'center', marginVertical: 8, paddingHorizontal: 4 },
-  input: { flex: 1, borderWidth: 1, borderColor: '#ccc', borderRadius: 20, paddingHorizontal: 16, height: 40, backgroundColor: '#f5f5f5' },
-  sendButton: { marginLeft: 4, backgroundColor: '#000', borderRadius: 20, padding: 10, justifyContent: 'center', alignItems: 'center' },
+  avatarPlaceholder: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 14,
+  },
+  name: { fontSize: 16, fontWeight: "600" },
+  lastMessage: { fontSize: 14, color: "#666", marginTop: 2 },
+  chatHeader: { flexDirection: "row", alignItems: "center", padding: 10 },
+  chatTitle: { marginLeft: 10, fontWeight: "700", fontSize: 16 },
+  bubble: { padding: 12, borderRadius: 16, marginBottom: 8, maxWidth: "90%" },
+  inputRow: { flexDirection: "row", alignItems: "center", padding: 8 },
+  input: { flex: 1, borderWidth: 1, borderRadius: 20, paddingHorizontal: 16 },
+  send: { backgroundColor: "#000", borderRadius: 20, padding: 10, marginLeft: 8 },
 });

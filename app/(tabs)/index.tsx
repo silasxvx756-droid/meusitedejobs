@@ -1,105 +1,100 @@
-// src/app/(tabs)/index.tsx
-
-import PostsList from "@/components/PostsList";
-import { usePosts } from "@/hooks/usePosts";
-import { useUserSync } from "@/hooks/useUserSync";
-
-import { useRef, useState } from "react";
+// src/screens/HomeScreen.tsx
+import React, { useRef, useState, useEffect } from "react";
 import {
-  RefreshControl,
   ScrollView,
   View,
-  Text,
-  TouchableOpacity,
-  useColorScheme,
   Platform,
   useWindowDimensions,
+  RefreshControl,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import * as ImagePicker from "expo-image-picker";
+import { usePosts } from "@/hooks/usePosts";
+import * as PostsListModule from "@/components/PostsList"; // IMPORT SEGURO
 import { useScrollToTop } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useCurrentUser } from "@/hooks/useCurrentUser";
+import { createUserOnBackend } from "@/hooks/useCreateUser";
+
+// Pega o default export se existir, senão pega o módulo inteiro
+const PostsList = PostsListModule.default || PostsListModule.PostsList;
+
+// ------------------------- FUNÇÃO DE NOTIFICAÇÃO -------------------------
+const createNotificationForPost = async (
+  post: any,
+  currentUserId: string,
+  existingNotifications: any[] = []
+) => {
+  const alreadyExists = existingNotifications.some(
+    (n) => n.postId === post.id && n.type === "post"
+  );
+  if (alreadyExists) return;
+
+  const storedNotifs = await AsyncStorage.getItem(`@notifications:${currentUserId}`);
+  const notifications: any[] = storedNotifs ? JSON.parse(storedNotifs) : [];
+
+  const newNotification = {
+    id: `${Date.now()}-${Math.random()}`,
+    type: "post",
+    createdAt: Date.now(),
+    read: false,
+    postId: post.id,
+    actor: post.actor,
+  };
+
+  const updatedNotifs = [newNotification, ...notifications];
+  await AsyncStorage.setItem(
+    `@notifications:${currentUserId}`,
+    JSON.stringify(updatedNotifs)
+  );
+};
 
 export default function HomeScreen() {
-  const router = useRouter();
-  const scrollRef = useRef<ScrollView>(null);
-  const colorScheme = useColorScheme();
   const { width } = useWindowDimensions();
-
-  const isDark = colorScheme === "dark";
   const isWeb = Platform.OS === "web";
   const isDesktop = isWeb && width >= 1024;
 
-  const { reload } = usePosts();
-  const [isRefetching, setIsRefetching] = useState(false);
-
-  useUserSync();
+  const router = useRouter();
+  const { posts, reload } = usePosts();
+  const scrollRef = useRef<ScrollView>(null);
   useScrollToTop(scrollRef);
 
-  // Pull to refresh (apenas mobile)
+  const [isRefetching, setIsRefetching] = useState(false);
+  const { currentUser } = useCurrentUser();
+
+  // 🔹 Sincroniza usuário no backend assim que ele estiver logado
+  useEffect(() => {
+    if (!currentUser) return;
+
+    createUserOnBackend({
+      clerkId: currentUser.id,
+      username: currentUser.username || currentUser.firstName.toLowerCase(),
+      fullName: currentUser.firstName + " " + currentUser.lastName,
+      avatarUrl: currentUser.profileImageUrl,
+    });
+  }, [currentUser]);
+
   const handlePullToRefresh = async () => {
     if (isDesktop) return;
-
     setIsRefetching(true);
     await reload();
     setIsRefetching(false);
   };
 
-  // Novo post
-  const openGalleryPost = async () => {
-    const { status } =
-      await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") return;
+  // 🔹 Cria notificações para novos posts
+  useEffect(() => {
+    if (!currentUser?.id || !posts) return;
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 1,
+    posts.forEach((post) => {
+      createNotificationForPost(post, currentUser.id);
     });
-
-    if (!result.canceled) {
-      router.push({
-        pathname: "/edit-post",
-        params: {
-          image: result.assets[0].uri,
-          type: "post",
-        },
-      });
-    }
-  };
+  }, [posts, currentUser?.id]);
 
   return (
     <SafeAreaView
-      style={{
-        flex: 1,
-        backgroundColor: isDark ? "#000" : "#fff",
-      }}
+      style={{ flex: 1, backgroundColor: "#fff" }} // fundo fixo branco
+      edges={['top', 'left', 'right']}
     >
-      {/* HEADER */}
-      <View
-        style={{
-          paddingHorizontal: isDesktop ? 24 : 16,
-          paddingVertical: 12,
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "flex-start",
-          borderBottomWidth: 0.5,
-          borderBottomColor: isDark ? "#222" : "#ddd",
-        }}
-      >
-        {/* Botão novo post */}
-        <TouchableOpacity onPress={openGalleryPost}>
-          <Text
-            style={{
-              fontSize: 28,
-              fontWeight: "300",
-              color: isDark ? "#fff" : "#000",
-            }}
-          >
-            +
-          </Text>
-        </TouchableOpacity>
-      </View>
-
       {/* FEED */}
       <ScrollView
         ref={scrollRef}
@@ -108,7 +103,7 @@ export default function HomeScreen() {
             <RefreshControl
               refreshing={isRefetching}
               onRefresh={handlePullToRefresh}
-              tintColor={isDark ? "#fff" : "#000"}
+              tintColor="#000" // cor fixa
             />
           ) : undefined
         }
@@ -117,14 +112,8 @@ export default function HomeScreen() {
           paddingVertical: isDesktop ? 24 : 0,
         }}
       >
-        {/* POSTS */}
-        <View
-          style={{
-            width: "100%",
-            maxWidth: isDesktop ? 620 : "100%",
-          }}
-        >
-          <PostsList isDark={isDark} />
+        <View style={{ width: "100%", maxWidth: isDesktop ? 620 : "100%" }}>
+          <PostsList />
         </View>
       </ScrollView>
     </SafeAreaView>

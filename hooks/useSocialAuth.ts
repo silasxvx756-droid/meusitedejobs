@@ -1,11 +1,8 @@
+// src/hooks/useSocialAuth.ts
 import { useSSO, useUser } from "@clerk/clerk-expo";
 import { useState } from "react";
-import { Alert } from "react-native";
+import { createUserOnBackend } from "./useCreateUser";
 
-/**
- * Gera username curto, único e seguro para URL
- * Ex: user_k8f2m9_482
- */
 const generateUsername = () => {
   const randomPart = Math.random().toString(36).substring(2, 8);
   const number = Math.floor(100 + Math.random() * 900);
@@ -23,19 +20,25 @@ export const useSocialAuth = () => {
     setIsLoading(true);
 
     try {
-      const { createdSessionId, setActive } = await startSSOFlow({
-        strategy,
-      });
+      const ssoResult = await startSSOFlow({ strategy });
 
-      if (!createdSessionId || !setActive) {
-        throw new Error("SSO failed");
+      if (!ssoResult?.createdSessionId || !ssoResult?.setActive) {
+        // login cancelado pelo usuário — apenas retorna false sem alert
+        return false;
       }
 
-      // Ativa sessão
+      const { createdSessionId, setActive } = ssoResult;
+
+      // ativa sessão
       await setActive({ session: createdSessionId });
 
-      // 🔹 Cria username automaticamente se não existir
-      if (user && !user.username) {
+      if (!user) {
+        // usuário ainda não carregou — retorna false sem alert
+        return false;
+      }
+
+      // cria username se não existir
+      if (!user.username) {
         let attempts = 0;
         let success = false;
 
@@ -44,30 +47,31 @@ export const useSocialAuth = () => {
             const username = generateUsername();
             await user.update({ username });
             success = true;
-          } catch (err) {
+          } catch {
             attempts++;
           }
         }
-
-        if (!success) {
-          console.warn("Não foi possível gerar username automaticamente");
-        }
       }
+
+      // cria usuário no backend
+      if (user.username) {
+        await createUserOnBackend({
+          clerkId: user.id,
+          username: user.username,
+          fullName: `${user.firstName ?? ""} ${user.lastName ?? ""}`.trim(),
+          avatarUrl: user.profileImageUrl,
+        });
+      }
+
+      return true;
     } catch (err) {
       console.log("Erro no social auth:", err);
-
-      const provider = strategy === "oauth_google" ? "Google" : "Apple";
-      Alert.alert(
-        "Erro",
-        `Falha ao entrar com ${provider}. Tente novamente.`
-      );
+      // falha silenciosa — apenas loga e retorna false
+      return false;
     } finally {
       setIsLoading(false);
     }
   };
 
-  return {
-    isLoading,
-    handleSocialAuth,
-  };
+  return { isLoading, handleSocialAuth };
 };

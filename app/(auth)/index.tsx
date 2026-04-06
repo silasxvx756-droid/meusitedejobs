@@ -4,7 +4,7 @@ import {
   ActivityIndicator,
   Image,
   Text,
-  TouchableOpacity,
+  Pressable,
   View,
   Platform,
   Dimensions,
@@ -13,9 +13,13 @@ import {
   ScrollView,
 } from "react-native";
 import { useRouter } from "expo-router";
+import { useUser } from "@clerk/clerk-expo";
+
+const API_URL = "http://192.168.0.100:3000";
 
 export default function Index() {
   const { handleSocialAuth, isLoading: isSocialLoading } = useSocialAuth();
+  const { user } = useUser();
   const router = useRouter();
 
   const { width } = Dimensions.get("window");
@@ -23,17 +27,49 @@ export default function Index() {
 
   const LOGO_SIZE = isDesktop ? 140 : 180;
 
-  // TODOS OS BOTÕES COM MESMO TAMANHO
-  const BUTTON_CLASS =
-    "flex-row items-center justify-center rounded-full px-4 h-12 w-full";
+  const [hoverGoogle, setHoverGoogle] = useState(false);
+  const [hoverComece, setHoverComece] = useState(false);
 
-  async function handleLogin(provider: "oauth_google" | "oauth_apple") {
+  const THEME_BLUE = "#2563EB";
+  const THEME_BLUE_HOVER = "#1D4ED8";
+  const GRAY_BORDER = "#D1D5DB";
+  const LIGHT_GRAY_BG = "#E5E7EB";
+
+  async function syncUserWithMongo() {
+    try {
+      if (!user) return;
+
+      const response = await fetch(`${API_URL}/api/users/sync`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          clerkId: user.id,
+          email: user.primaryEmailAddress?.emailAddress,
+          name: user.fullName,
+          image: user.imageUrl,
+        }),
+      });
+
+      const data = await response.json();
+      console.log("Mongo Sync:", data);
+    } catch (error) {
+      console.log("Erro ao sincronizar usuário:", error);
+    }
+  }
+
+  async function handleLogin(provider: "oauth_google") {
     const success = await handleSocialAuth(provider);
-    if (success) router.replace("/(auth)/choose-username");
+
+    if (success) {
+      await syncUserWithMongo();
+      router.replace("/(tabs)");
+    }
   }
 
   return (
-    <SafeAreaView className="flex-1 bg-white dark:bg-black">
+    <SafeAreaView className="flex-1 bg-white dark:bg-white">
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         className="flex-1"
@@ -44,7 +80,9 @@ export default function Index() {
             justifyContent: "center",
             alignItems: "center",
             paddingVertical: 40,
+            paddingBottom: 60,
           }}
+          className="bg-white dark:bg-white"
         >
           <View
             style={{
@@ -54,7 +92,6 @@ export default function Index() {
               borderRadius: 24,
               overflow: "hidden",
             }}
-            className="bg-white dark:bg-zinc-900"
           >
             {/* LADO ESQUERDO */}
             <View
@@ -62,6 +99,7 @@ export default function Index() {
                 flex: 1,
                 padding: isDesktop ? 40 : 20,
                 justifyContent: "center",
+                alignItems: "center",
               }}
             >
               {/* LOGO */}
@@ -74,81 +112,87 @@ export default function Index() {
               </View>
 
               {/* BOTÕES SOCIAIS */}
-              <View className="gap-3">
-                {/* APPLE */}
-                <TouchableOpacity
-                  className={`${BUTTON_CLASS} bg-transparent border-2 border-gray-300 dark:border-gray-600`}
-                  onPress={() => handleLogin("oauth_apple")}
-                  disabled={isSocialLoading}
-                >
-                  {isSocialLoading ? (
-                    <ActivityIndicator color="#9CA3AF" />
-                  ) : (
-                    <View className="flex-row items-center justify-center h-full">
-                      <Image
-                        source={require("../../assets/images/apple.png")}
-                        style={{ width: 18, height: 18 }}
-                        resizeMode="contain"
-                      />
-                      <Text className="ml-2 text-black dark:text-white font-semibold text-base">
-                        Continuar com Apple
-                      </Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-
-                {/* GOOGLE */}
-                <TouchableOpacity
-                  className={`${BUTTON_CLASS} bg-transparent border-2 border-gray-300 dark:border-gray-600`}
+              <View
+                style={{
+                  width: isDesktop ? 400 : "100%",
+                }}
+                className="gap-3"
+              >
+                {/* Google */}
+                <Pressable
                   onPress={() => handleLogin("oauth_google")}
                   disabled={isSocialLoading}
+                  onMouseEnter={() => isDesktop && setHoverGoogle(true)}
+                  onMouseLeave={() => isDesktop && setHoverGoogle(false)}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    height: isDesktop ? 36 : 48,
+                    borderRadius: 9999,
+                    width: "100%",
+                    borderWidth: 2,
+                    borderColor: GRAY_BORDER,
+                    backgroundColor: hoverGoogle ? LIGHT_GRAY_BG : "transparent",
+                    paddingHorizontal: 16,
+                  }}
                 >
                   {isSocialLoading ? (
                     <ActivityIndicator color="#9CA3AF" />
                   ) : (
-                    <View className="flex-row items-center justify-center h-full">
+                    <>
                       <Image
                         source={require("../../assets/images/google.png")}
                         style={{ width: 18, height: 18 }}
                         resizeMode="contain"
                       />
-                      <Text className="ml-2 text-black dark:text-white font-semibold text-base">
-                        Continuar com Google
-                      </Text>
-                    </View>
+
+                      <View style={{ flex: 1, alignItems: "center" }}>
+                        <Text className="text-black font-semibold text-base">
+                          Continuar com Google
+                        </Text>
+                      </View>
+                    </>
                   )}
-                </TouchableOpacity>
+                </Pressable>
               </View>
             </View>
 
-            {/* LADO DIREITO - DESKTOP */}
+            {/* LADO DIREITO DESKTOP */}
             {isDesktop && (
               <View
                 style={{
                   flex: 1,
-                  backgroundColor: "#ffffff",
                   justifyContent: "center",
                   alignItems: "center",
                   padding: 40,
                 }}
               >
-                <Text className="text-4xl font-bold text-gray-800 dark:text-white mb-4 text-center">
+                <Text className="text-4xl font-bold text-gray-800 mb-4 text-center">
                   Conecte-se. Crie. Inspire.
                 </Text>
-                <Text className="text-lg text-gray-600 dark:text-gray-300 mb-6 text-center">
+
+                <Text className="text-lg text-gray-600 mb-6 text-center">
                   Entre para nossa comunidade e compartilhe suas ideias com o
                   mundo. Experimente recursos exclusivos e colaboração em tempo
                   real.
                 </Text>
 
-                <TouchableOpacity
-                  onPress={() => router.push("/(auth)/register-phone")}
-                  className="bg-blue-600 px-6 py-3 rounded-full"
+                <Pressable
+                  onPress={() => router.push("/(auth)/register-email")}
+                  onMouseEnter={() => setHoverComece(true)}
+                  onMouseLeave={() => setHoverComece(false)}
+                  style={{
+                    backgroundColor: hoverComece ? THEME_BLUE_HOVER : THEME_BLUE,
+                    paddingVertical: 12,
+                    paddingHorizontal: 24,
+                    borderRadius: 9999,
+                    alignItems: "center",
+                  }}
                 >
                   <Text className="text-white font-semibold text-base text-center">
                     Comece agora
                   </Text>
-                </TouchableOpacity>
+                </Pressable>
               </View>
             )}
           </View>

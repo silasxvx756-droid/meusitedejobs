@@ -1,3 +1,4 @@
+// src/hooks/useCurrentUser.ts
 import { useUser } from "@clerk/clerk-expo";
 import { useMemo, useEffect } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -12,6 +13,7 @@ export interface CurrentUser {
 export const useCurrentUser = () => {
   const { user, isLoaded } = useUser();
 
+  // Normaliza usuário
   const currentUser: CurrentUser | null = useMemo(() => {
     if (!isLoaded || !user) return null;
 
@@ -21,6 +23,7 @@ export const useCurrentUser = () => {
       "usuario";
 
     const displayName =
+      (user.unsafeMetadata?.displayName as string) ||
       `${user.firstName || ""} ${user.lastName || ""}`.trim() ||
       username;
 
@@ -32,20 +35,28 @@ export const useCurrentUser = () => {
     };
   }, [isLoaded, user]);
 
-  // 🔥 SALVA TODO USUÁRIO QUE LOGAR
+  // Salva ou atualiza no AsyncStorage
   useEffect(() => {
     if (!currentUser) return;
 
     (async () => {
-      const stored = await AsyncStorage.getItem("@all_users");
-      const users = stored ? JSON.parse(stored) : [];
+      try {
+        const stored = await AsyncStorage.getItem("@all_users");
+        const users: CurrentUser[] = stored ? JSON.parse(stored) : [];
 
-      if (!users.find((u: any) => u.id === currentUser.id)) {
-        users.push(currentUser);
+        const index = users.findIndex((u) => u.id === currentUser.id);
+        if (index >= 0) {
+          users[index] = currentUser; // atualiza
+        } else {
+          users.push(currentUser);
+        }
+
         await AsyncStorage.setItem("@all_users", JSON.stringify(users));
+      } catch (err) {
+        console.log("Erro ao salvar usuário no AsyncStorage", err);
       }
     })();
   }, [currentUser]);
 
-  return { currentUser };
+  return { currentUser, isLoaded };
 };
