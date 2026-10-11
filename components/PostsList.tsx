@@ -23,6 +23,19 @@ import { useNavigation, useFocusEffect } from "@react-navigation/native";
 const API_URL = "https://backend-social-app-1.onrender.com";
 const { width } = Dimensions.get("window");
 
+// Componente de anúncio
+const AdItem = () => (
+  <View style={styles.adContainer}>
+    <Text style={styles.adLabel}>Patrocinado</Text>
+    <View style={styles.adBox}>
+      <Text style={{ fontWeight: "700" }}>Seu anúncio aqui</Text>
+      <Text style={{ fontSize: 12, color: "#555" }}>
+        Venda produtos ou serviços
+      </Text>
+    </View>
+  </View>
+);
+
 export default function PostsList({
   username,
   showNewPostButton = true,
@@ -40,7 +53,6 @@ export default function PostsList({
   const [content, setContent] = useState("");
   const [image, setImage] = useState<any>(null);
   const [posting, setPosting] = useState(false);
-
   const [likingPostId, setLikingPostId] = useState<string | null>(null);
 
   const [commentsModal, setCommentsModal] = useState(false);
@@ -57,17 +69,16 @@ export default function PostsList({
     avatar: user?.imageUrl,
   };
 
+  // Formata tempo
   const formatTime = (date: string) => {
     if (!date) return "";
     const now = new Date();
     const past = new Date(date);
     const diff = Math.floor((now.getTime() - past.getTime()) / 1000);
-
     if (diff < 60) return "agora";
     if (diff < 3600) return `${Math.floor(diff / 60)} min`;
     if (diff < 86400) return `${Math.floor(diff / 3600)} h`;
     if (diff < 604800) return `${Math.floor(diff / 86400)} d`;
-
     return past.toLocaleDateString();
   };
 
@@ -77,7 +88,6 @@ export default function PostsList({
       setLoading(true);
       const res = await fetch(`${API_URL}/posts`);
       const data = await res.json();
-
       const filtered = username
         ? data.filter((p: any) => p.actor?.id === username)
         : data;
@@ -131,10 +141,8 @@ export default function PostsList({
   // CREATE POST
   const handleCreatePost = async () => {
     if (!content.trim() && !image) return;
-
     try {
       setPosting(true);
-
       const form = new FormData();
       form.append("title", "Post");
       form.append("content", content);
@@ -143,7 +151,6 @@ export default function PostsList({
       if (image) {
         const uriParts = image.uri.split(".");
         const fileType = uriParts[uriParts.length - 1];
-
         form.append("image", {
           uri: image.uri,
           name: `photo.${fileType}`,
@@ -159,7 +166,6 @@ export default function PostsList({
       const newPost = await res.json();
       const newPosts = [newPost, ...posts];
       setPosts(newPosts);
-
       setModalVisible(false);
       setContent("");
       setImage(null);
@@ -222,32 +228,24 @@ export default function PostsList({
 
   // DELETE POST
   const handleDeletePost = async (postId: string) => {
-    Alert.alert(
-      "Apagar postagem",
-      "Tem certeza que deseja apagar esta postagem?",
-      [
-        { text: "Cancelar", style: "cancel" },
-        {
-          text: "Apagar",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              const res = await fetch(`${API_URL}/posts/${postId}`, {
-                method: "DELETE",
-              });
-              if (!res.ok) throw new Error("Erro ao apagar");
-
-              const updatedPosts = posts.filter((p) => p._id !== postId);
-              setPosts(updatedPosts);
-              if (onPostAction) onPostAction(updatedPosts);
-            } catch {
-              Alert.alert("Erro ao apagar postagem");
-              fetchPosts();
-            }
-          },
+    Alert.alert("Apagar postagem", "Tem certeza que deseja apagar?", [
+      { text: "Cancelar", style: "cancel" },
+      {
+        text: "Apagar",
+        style: "destructive",
+        onPress: async () => {
+          try {
+            await fetch(`${API_URL}/posts/${postId}`, { method: "DELETE" });
+            const updatedPosts = posts.filter((p) => p._id !== postId);
+            setPosts(updatedPosts);
+            if (onPostAction) onPostAction(updatedPosts);
+          } catch {
+            Alert.alert("Erro ao apagar postagem");
+            fetchPosts();
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
   // COMMENTS
@@ -259,7 +257,6 @@ export default function PostsList({
 
   const handleComment = async () => {
     if (!commentText.trim() || !selectedPost) return;
-
     try {
       const res = await fetch(
         `${API_URL}/posts/${selectedPost._id}/comments`,
@@ -271,7 +268,6 @@ export default function PostsList({
       );
 
       const newComment = await res.json();
-
       const updatedPosts = posts.map((p) =>
         p._id === selectedPost._id
           ? { ...p, comments: [...(p.comments || []), newComment] }
@@ -281,7 +277,6 @@ export default function PostsList({
       setComments((prev) => [...prev, newComment]);
       setPosts(updatedPosts);
       setCommentText("");
-
       if (onPostAction) onPostAction(updatedPosts);
     } catch {
       Alert.alert("Erro ao comentar");
@@ -327,6 +322,11 @@ export default function PostsList({
     ]);
   };
 
+  // 🔥 MISTURA POSTS + ADS
+  const mixedData = posts.flatMap((post, index) =>
+    (index + 1) % 4 === 0 ? [post, { type: "ad", id: `ad-${index}` }] : post
+  );
+
   if (loading)
     return <ActivityIndicator size="large" style={{ marginTop: 20 }} />;
 
@@ -336,9 +336,7 @@ export default function PostsList({
         <View style={styles.header}>
           <TouchableOpacity
             onPress={() =>
-              navigation.navigate("PostCreate", {
-                onPostCreated: fetchPosts,
-              })
+              navigation.navigate("PostCreate", { onPostCreated: fetchPosts })
             }
           >
             <Ionicons name="add" size={32} />
@@ -347,12 +345,16 @@ export default function PostsList({
       )}
 
       <FlatList
-        data={posts}
-        keyExtractor={(item) => item._id || item.id}
+        data={mixedData}
+        keyExtractor={(item: any, index) =>
+          item.type === "ad" ? item.id : item._id || item.id || index.toString()
+        }
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
-        renderItem={({ item }) => {
+        renderItem={({ item }: any) => {
+          if (item.type === "ad") return <AdItem />;
+
           const displayName =
             item.actor?.id === currentUser.id
               ? currentUser.displayName
@@ -370,12 +372,7 @@ export default function PostsList({
                     }
                   >
                     <Image
-                      source={{
-                        uri:
-                          item.actor?.id === currentUser.id
-                            ? currentUser.avatar
-                            : item.actor?.avatar,
-                      }}
+                      source={{ uri: item.actor?.avatar }}
                       style={styles.postAvatar}
                     />
                   </TouchableOpacity>
@@ -413,7 +410,9 @@ export default function PostsList({
                       size={22}
                       color={item.likedByMe ? "#ff3040" : "#222"}
                     />
-                    <Text style={styles.count}>{item.likes?.length || 0}</Text>
+                    <Text style={styles.count}>
+                      {item.likes?.length || 0}
+                    </Text>
                   </TouchableOpacity>
 
                   <TouchableOpacity
@@ -455,11 +454,9 @@ export default function PostsList({
               keyExtractor={(item) => item._id}
               renderItem={({ item }) => {
                 const isMyComment = item.user.id === currentUser.id;
-
                 const displayName = isMyComment
                   ? currentUser.displayName
                   : item.user.displayName;
-
                 const avatarUri = isMyComment
                   ? currentUser.avatar
                   : item.user.avatar;
@@ -470,7 +467,6 @@ export default function PostsList({
                       source={{ uri: avatarUri }}
                       style={styles.commentAvatar}
                     />
-
                     <View style={{ flex: 1, marginLeft: 8 }}>
                       <View
                         style={{
@@ -479,9 +475,7 @@ export default function PostsList({
                         }}
                       >
                         <View style={{ flexDirection: "row", gap: 6 }}>
-                          <Text style={{ fontWeight: "700" }}>
-                            {displayName}
-                          </Text>
+                          <Text style={{ fontWeight: "700" }}>{displayName}</Text>
                           <Text style={{ fontSize: 12, color: "#555" }}>
                             {formatTime(item.createdAt)}
                           </Text>
@@ -491,9 +485,7 @@ export default function PostsList({
                           <TouchableOpacity
                             onPress={() => handleDeleteComment(item._id)}
                           >
-                            <Text style={{ fontSize: 20, color: "#999" }}>
-                              ⋯
-                            </Text>
+                            <Text style={{ fontSize: 20, color: "#999" }}>⋯</Text>
                           </TouchableOpacity>
                         )}
                       </View>
@@ -548,6 +540,8 @@ const styles = StyleSheet.create({
   actionsRow: { flexDirection: "row", marginTop: 6, gap: 16 },
   actionBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
   count: { fontSize: 13, color: "#333" },
+
+  // COMMENTS
   commentsHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -562,5 +556,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderColor: "#ccc",
+  },
+
+  // ADS
+  adContainer: {
+    padding: 12,
+    backgroundColor: "#fff",
+    marginBottom: 16,
+  },
+  adLabel: {
+    fontSize: 12,
+    color: "#888",
+    marginBottom: 6,
+  },
+  adBox: {
+    height: 120,
+    borderRadius: 12,
+    backgroundColor: "#f1f1f1",
+    justifyContent: "center",
+    alignItems: "center",
   },
 });
