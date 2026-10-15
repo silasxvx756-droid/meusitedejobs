@@ -38,8 +38,8 @@ export default function Page() {
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [instaHandle, setInstaHandle] = useState("");
 
-  const instagramUrl = "https://www.instagram.com/conect.designer123/";
-  const targetInstagramHandle = "@conect.designer123";
+  const instagramUrl = "https://www.instagram.com/conect_designer1/";
+  const targetInstagramHandle = "@conect_designer1";
 
   // Animações
   const rolesListScale = useRef(new Animated.Value(1)).current;
